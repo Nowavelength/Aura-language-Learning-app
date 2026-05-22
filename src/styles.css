@@ -92,6 +92,7 @@ body {
   max-height: calc(100vh - 3rem);
   overflow-y: auto;
   padding-right: 0.25rem;
+  padding-bottom: 2.5rem; /* Add generous bottom padding to allow complete scrolling past bottom edges */
   scrollbar-width: thin;
   scrollbar-color: rgba(92, 92, 111, 0.1) transparent;
   transition: flex 0.4s cubic-bezier(0.16, 1, 0.3, 1);
@@ -105,6 +106,7 @@ body {
   max-height: calc(100vh - 3rem);
   overflow-y: auto;
   padding-right: 0.25rem;
+  padding-bottom: 2.5rem; /* Add generous bottom padding to allow complete scrolling past bottom edges */
   scrollbar-width: thin;
   scrollbar-color: rgba(92, 92, 111, 0.1) transparent;
   transition: flex 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.4s, padding 0.4s ease;
@@ -1303,10 +1305,11 @@ body, .bento-card, textarea, select, .status-text, .online-indicator, .speed-con
   opacity: 0;
   transform: scale(0.96);
   flex-direction: column;
+  flex: 0 0 auto;
   background: var(--zen-bg, linear-gradient(135deg, rgba(255, 240, 245, 0.65) 0%, rgba(255, 225, 235, 0.45) 100%)) !important;
   border-color: var(--zen-border, rgba(255, 240, 245, 0.8)) !important;
   color: var(--zen-text, #5A2A42);
-  min-height: 240px;
+  min-height: 320px;
   transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1),
               transform 0.6s cubic-bezier(0.16, 1, 0.3, 1),
               background 0.8s ease,
