@@ -196,12 +196,10 @@ fn download_voice(app: tauri::AppHandle, model_name: String, model_url: String, 
     }
 
     // Post-download integrity verification
-    let model_valid = fs::metadata(&model_path)
-        .map(|m| m.len() >= MIN_MODEL_SIZE)
-        .unwrap_or(false);
-    let config_valid = fs::metadata(&config_path)
-        .map(|m| m.len() >= MIN_CONFIG_SIZE)
-        .unwrap_or(false);
+    let model_len = fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0);
+    let config_len = fs::metadata(&config_path).map(|m| m.len()).unwrap_or(0);
+    let model_valid = model_len >= MIN_MODEL_SIZE;
+    let config_valid = config_len >= MIN_CONFIG_SIZE;
 
     if !model_valid || !config_valid {
         // The server returned a 404 error page or an empty file — clean up
@@ -211,8 +209,8 @@ fn download_voice(app: tauri::AppHandle, model_name: String, model_url: String, 
             "Downloaded files for '{}' failed integrity check (model: {} bytes, config: {} bytes). \
              The voice URL may be invalid. Both files have been removed.",
             model_name,
-            fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0),
-            fs::metadata(&config_path).map(|m| m.len()).unwrap_or(0)
+            model_len,
+            config_len
         ));
     }
 
