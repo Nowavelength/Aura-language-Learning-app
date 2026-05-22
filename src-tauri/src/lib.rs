@@ -7,16 +7,27 @@ use tauri::Manager;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+/// Minimum valid size for a voice .onnx model file (1 MB).
+const MIN_MODEL_SIZE: u64 = 1_000_000;
+/// Minimum valid size for a voice .onnx.json config file (100 bytes).
+const MIN_CONFIG_SIZE: u64 = 100;
+/// Minimum valid size for piper.exe binary (1 MB).
+const MIN_PIPER_SIZE: u64 = 1_000_000;
+
 #[tauri::command]
 fn is_piper_downloaded(app: tauri::AppHandle) -> bool {
     if let Ok(mut path) = app.path().app_local_data_dir() {
         path.push("bin");
         path.push("piper");
         path.push("piper.exe");
-        path.exists()
-    } else {
-        false
+        if path.exists() {
+            // Validate that piper.exe is a real binary, not a corrupted/empty file
+            if let Ok(meta) = fs::metadata(&path) {
+                return meta.len() >= MIN_PIPER_SIZE;
+            }
+        }
     }
+    false
 }
 
 #[tauri::command]
@@ -26,15 +37,23 @@ fn download_piper(app: tauri::AppHandle) -> Result<String, String> {
     let piper_exe = bin_dir.join("piper").join("piper.exe");
 
     if piper_exe.exists() {
-        return Ok("Piper is already installed".to_string());
+        if let Ok(meta) = fs::metadata(&piper_exe) {
+            if meta.len() >= MIN_PIPER_SIZE {
+                return Ok("Piper is already installed".to_string());
+            }
+        }
+        // Remove corrupted piper.exe
+        let _ = fs::remove_file(&piper_exe);
     }
 
     fs::create_dir_all(&bin_dir).map_err(|e| e.to_string())?;
 
     let zip_path = bin_dir.join("piper.zip");
     
+    // Optimized PowerShell download: SilentlyContinue disables progress bar (20x faster),
+    // UseBasicParsing avoids IE engine dependency
     let download_script = format!(
-        "Invoke-WebRequest -Uri 'https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip' -OutFile '{}'",
+        "$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri 'https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip' -OutFile '{}' -UseBasicParsing",
         zip_path.to_string_lossy().replace('\\', "/")
     );
 
@@ -76,7 +95,14 @@ fn download_piper(app: tauri::AppHandle) -> Result<String, String> {
     let _ = remove_cmd.status();
 
     if piper_exe.exists() {
-        Ok("Piper installed successfully".to_string())
+        if let Ok(meta) = fs::metadata(&piper_exe) {
+            if meta.len() >= MIN_PIPER_SIZE {
+                return Ok("Piper installed successfully".to_string());
+            }
+        }
+        // Clean up invalid extraction
+        let _ = fs::remove_file(&piper_exe);
+        Err("Piper binary appears corrupted after extraction".to_string())
     } else {
         Err("Failed to verify piper.exe after extraction".to_string())
     }
@@ -84,13 +110,25 @@ fn download_piper(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 fn is_voice_downloaded(app: tauri::AppHandle, model_name: String) -> bool {
-    if let Ok(mut path) = app.path().app_local_data_dir() {
-        path.push("models");
-        path.push(&model_name);
-        path.exists()
-    } else {
-        false
+    if let Ok(mut base) = app.path().app_local_data_dir() {
+        base.push("models");
+
+        let model_path = base.join(&model_name);
+        let config_path = base.join(format!("{}.json", model_name));
+
+        // Both files must exist AND exceed minimum size thresholds
+        // This prevents 404 error pages (typically 15 bytes) from being recognized as valid
+        if model_path.exists() && config_path.exists() {
+            let model_ok = fs::metadata(&model_path)
+                .map(|m| m.len() >= MIN_MODEL_SIZE)
+                .unwrap_or(false);
+            let config_ok = fs::metadata(&config_path)
+                .map(|m| m.len() >= MIN_CONFIG_SIZE)
+                .unwrap_or(false);
+            return model_ok && config_ok;
+        }
     }
+    false
 }
 
 #[tauri::command]
@@ -103,9 +141,26 @@ fn download_voice(app: tauri::AppHandle, model_name: String, model_url: String, 
     let model_path = models_dir.join(&model_name);
     let config_path = models_dir.join(format!("{}.json", model_name));
 
+    // Pre-download cleanup: remove any existing files that are too small (corrupted/404)
+    if model_path.exists() {
+        if let Ok(meta) = fs::metadata(&model_path) {
+            if meta.len() < MIN_MODEL_SIZE {
+                let _ = fs::remove_file(&model_path);
+            }
+        }
+    }
+    if config_path.exists() {
+        if let Ok(meta) = fs::metadata(&config_path) {
+            if meta.len() < MIN_CONFIG_SIZE {
+                let _ = fs::remove_file(&config_path);
+            }
+        }
+    }
+
+    // Download model file if not already valid
     if !model_path.exists() {
         let download_model = format!(
-            "Invoke-WebRequest -Uri '{}' -OutFile '{}'",
+            "$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
             model_url,
             model_path.to_string_lossy().replace('\\', "/")
         );
@@ -115,13 +170,16 @@ fn download_voice(app: tauri::AppHandle, model_name: String, model_url: String, 
         download_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         let status = download_cmd.status().map_err(|e| e.to_string())?;
         if !status.success() {
+            // Clean up partial download
+            let _ = fs::remove_file(&model_path);
             return Err(format!("Failed to download model file: {}", model_name));
         }
     }
 
+    // Download config file if not already valid
     if !config_path.exists() {
         let download_config = format!(
-            "Invoke-WebRequest -Uri '{}' -OutFile '{}'",
+            "$ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
             config_url,
             config_path.to_string_lossy().replace('\\', "/")
         );
@@ -131,8 +189,31 @@ fn download_voice(app: tauri::AppHandle, model_name: String, model_url: String, 
         download_config_cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
         let status = download_config_cmd.status().map_err(|e| e.to_string())?;
         if !status.success() {
+            // Clean up partial download
+            let _ = fs::remove_file(&config_path);
             return Err(format!("Failed to download config file for: {}", model_name));
         }
+    }
+
+    // Post-download integrity verification
+    let model_valid = fs::metadata(&model_path)
+        .map(|m| m.len() >= MIN_MODEL_SIZE)
+        .unwrap_or(false);
+    let config_valid = fs::metadata(&config_path)
+        .map(|m| m.len() >= MIN_CONFIG_SIZE)
+        .unwrap_or(false);
+
+    if !model_valid || !config_valid {
+        // The server returned a 404 error page or an empty file — clean up
+        let _ = fs::remove_file(&model_path);
+        let _ = fs::remove_file(&config_path);
+        return Err(format!(
+            "Downloaded files for '{}' failed integrity check (model: {} bytes, config: {} bytes). \
+             The voice URL may be invalid. Both files have been removed.",
+            model_name,
+            fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0),
+            fs::metadata(&config_path).map(|m| m.len()).unwrap_or(0)
+        ));
     }
 
     Ok("Voice downloaded successfully".to_string())
